@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.RestController;
  * path-scoped url-pattern. This is the configuration the reported authorization bypass affects - hand-rolled filter
  * authorization, as opposed to Spring Security.
  */
+// No Spring Security auto-configuration to exclude here: Boot 4 moved those classes out of
+// org.springframework.boot.autoconfigure.security.servlet, so nothing secures this app implicitly and the
+// path-scoped filter below is the only protection. The springboot3 copy of this class does need the exclusion.
 @SpringBootApplication
 @RestController
 public class FilterAuthApplication {
