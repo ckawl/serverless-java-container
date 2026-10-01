@@ -763,6 +763,23 @@ public abstract class AwsHttpServletRequest implements HttpServletRequest {
 
 
     /**
+     * The request URI with the context path removed, exactly as it arrived: not decoded, not normalized. The context
+     * path is configured rather than client-supplied, so it is excluded from anything that inspects what the client
+     * actually sent.
+     * @param request The incoming request
+     * @return The raw request path relative to the context
+     */
+    public static String contextRelativeRequestUri(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (uri != null && contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath)) {
+            return uri.substring(contextPath.length());
+        }
+        return (uri == null || uri.isEmpty() ? "/" : uri);
+    }
+
+
+    /**
      * Produces the canonical form of a request path: percent-decoded exactly once and then normalized. This is the
      * form every routing and authorization decision must use, so that no spelling of a path can make two decisions
      * disagree about which resource is being requested.
