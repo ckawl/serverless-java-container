@@ -228,6 +228,35 @@ public class FilterChainManagerPathBypassTest {
         assertEquals("/admin user/secret", AwsHttpServletRequest.canonicalizePath("/admin%20user/secret"));
     }
 
+    /**
+     * Characters outside the BMP are stored as surrogate pairs. Encoding each half separately replaces the
+     * character with "??", and because getPathInfo() returns the canonical path the corruption would reach the
+     * application. Only triggered when the path also contains a '%', since otherwise decoding is skipped.
+     */
+    @Test
+    void canonicalize_nonBmpCharactersSurviveDecoding() {
+        assertEquals("/\uD83D\uDE00/admin", AwsHttpServletRequest.canonicalizePath("/\uD83D\uDE00/%61dmin"));
+        assertEquals("/\uD83D\uDE00/admin", AwsHttpServletRequest.canonicalizePath("/\uD83D\uDE00/admin"));
+        // CJK Extension B, also outside the BMP
+        assertEquals("/\uD840\uDC0B/admin", AwsHttpServletRequest.canonicalizePath("/\uD840\uDC0B/%61dmin"));
+    }
+
+    /** BMP characters were never affected, but pin them so the surrogate handling cannot regress them. */
+    @Test
+    void canonicalize_bmpMultiByteCharactersSurviveDecoding() {
+        assertEquals("/caf\u00e9/admin", AwsHttpServletRequest.canonicalizePath("/caf\u00e9/%61dmin"));
+        assertEquals("/\u4f60\u597d/admin", AwsHttpServletRequest.canonicalizePath("/\u4f60\u597d/%61dmin"));
+    }
+
+    /** An unpaired surrogate is malformed input and must not throw. */
+    @Test
+    void canonicalize_loneSurrogateDoesNotThrow() {
+        AwsHttpServletRequest.canonicalizePath("/\uD83D/%61dmin");
+        AwsHttpServletRequest.canonicalizePath("/%61dmin/\uD83D");
+        AwsHttpServletRequest.canonicalizePath("/\uDE00/%61dmin");
+    }
+
+
     /** Canonicalization must never escape the root via excess dot segments. */
     @Test
     void canonicalize_traversalAboveRootIsContained() {
