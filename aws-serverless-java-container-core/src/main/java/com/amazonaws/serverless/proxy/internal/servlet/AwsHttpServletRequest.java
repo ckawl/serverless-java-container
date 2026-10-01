@@ -813,8 +813,12 @@ public abstract class AwsHttpServletRequest implements HttpServletRequest {
                     continue;
                 }
             }
-            byte[] literal = String.valueOf(current).getBytes(StandardCharsets.UTF_8);
+            // A character outside the BMP is stored as a surrogate pair. Encoding either half on its own is not
+            // possible, so the pair has to be written as a unit or the character is replaced by "??".
+            int end = i + 1 < path.length() && Character.isSurrogatePair(current, path.charAt(i + 1)) ? i + 2 : i + 1;
+            byte[] literal = path.substring(i, end).getBytes(StandardCharsets.UTF_8);
             decoded.write(literal, 0, literal.length);
+            i = end - 1;
         }
 
         return new String(decoded.toByteArray(), StandardCharsets.UTF_8);
