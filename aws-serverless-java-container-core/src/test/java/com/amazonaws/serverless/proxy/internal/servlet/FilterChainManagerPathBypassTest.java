@@ -157,21 +157,21 @@ public class FilterChainManagerPathBypassTest {
     }
 
     /**
-     * A dot segment that leads OUT of the protected path must not let the request reach a servlet mapped there.
-     * Filter selection and servlet resolution both run on the canonical path, so "/admin/x/../../public" is
-     * "/public" to both: the /admin/* filter correctly does not apply, and neither does the /admin/* servlet.
+     * A dot segment that steps OUT of the protected prefix must still select that prefix's filter. The canonical
+     * form is "/public", but Spring MVC matches on the raw request URI and leaves dot segments to a servlet
+     * container that does not exist here, so "/admin/**" still reaches an admin handler. Selecting the filter for
+     * the raw spelling as well is what stops that from being a bypass.
      */
     @Test
-    void filterChain_dotSegmentLeadingOutOfProtectedPath_agreesWithServletResolution() {
-        assertEquals(0, filterCountFor("/admin/x/../../public"));
-        assertNull(servletForPath("/admin/x/../../public"));
+    void filterChain_dotSegmentLeadingOutOfProtectedPath_stillSelectsFilter() {
+        assertEquals(1, filterCountFor("/admin/x/../../public"));
     }
 
     /** Same, with the dot segments percent-encoded. */
     @Test
-    void filterChain_encodedDotSegmentLeadingOut_agreesWithServletResolution() {
-        assertEquals(0, filterCountFor("/admin/x/%2e%2e/%2e%2e/public"));
-        assertNull(servletForPath("/admin/x/%2e%2e/%2e%2e/public"));
+    void filterChain_encodedDotSegmentLeadingOut_stillSelectsFilter() {
+        assertEquals(1, filterCountFor("/admin/x/%2e%2e/%2e%2e/public"));
+        assertEquals(1, filterCountFor("/admin/secret%2F..%2F..%2Fpublic"));
     }
 
     /**
@@ -184,26 +184,40 @@ public class FilterChainManagerPathBypassTest {
         assertNotNull(servletForPath("/public/x/../../admin/secret"));
     }
 
-    /** Whatever the spelling, filter selection and servlet resolution must never disagree. */
+    /**
+     * The invariant that matters: filter selection must never UNDER-select. If any spelling of a path could reach a
+     * servlet mapped under a protected prefix, the filter for that prefix has to run. Over-selection is permitted
+     * and expected, because consumers downstream disagree about which form of the path they route on, so predicting
+     * a single winner is what produced this bug class in the first place.
+     */
     @Test
-    void filterSelectionAndServletResolutionNeverDisagree() {
+    void filterSelectionNeverUnderSelects() {
         for (String path : new String[]{
                 "/admin/secret",
                 "/%61dmin/secret",
+                "/adm%69n/secret",
+                "/ADMIN/secret",
                 "/admin%2Fsecret",
                 "/admin/x/../../public",
                 "/admin/x/%2e%2e/%2e%2e/public",
+                "/admin/secret%2F..%2F..%2Fpublic",
+                "/%61dmin/../public",
                 "/public/x/../../admin/secret",
-                "/public/info",
                 "/admin//secret",
                 "/./admin/secret",
                 "/../../admin/secret"
         }) {
-            boolean filterApplies = filterCountFor(path) > 0;
-            boolean servletApplies = servletForPath(path) != null;
-            assertEquals(filterApplies, servletApplies,
-                    "filter selection and servlet resolution disagree for " + path);
+            assertTrue(filterCountFor(path) > 0,
+                    "no filter selected for a spelling that can reach the protected prefix: " + path);
         }
+    }
+
+    /** A path with no relationship to the protected prefix under any spelling must not select its filter. */
+    @Test
+    void filterSelection_unrelatedPathsAreNotOverSelected() {
+        assertEquals(0, filterCountFor("/public/info"));
+        assertEquals(0, filterCountFor("/public/x/y/z"));
+        assertEquals(0, filterCountFor("/"));
     }
 
 

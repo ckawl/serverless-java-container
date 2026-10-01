@@ -4,6 +4,7 @@ import com.amazonaws.serverless.proxy.internal.testutils.AwsProxyRequestBuilder;
 import com.amazonaws.serverless.proxy.internal.testutils.MockLambdaContext;
 import com.amazonaws.serverless.proxy.model.AwsProxyResponse;
 import com.amazonaws.serverless.proxy.spring.filterauthapp.AdminAuthorizationFilter;
+import com.amazonaws.serverless.proxy.spring.filterauthapp.AdminWildcardController;
 import com.amazonaws.serverless.proxy.spring.filterauthapp.FilterAuthApplication;
 import com.amazonaws.serverless.proxy.spring.filterauthapp.LambdaHandler;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -107,6 +108,41 @@ public class FilterAuthorizationBypassTest {
     void dotSegmentTraversal_isBlocked(String reqType) {
         assertProtected(reqType, "/public/../admin/secret");
     }
+
+    /**
+     * Spellings that step OUT of the protected prefix. The canonical form is "/public/info", but Spring MVC matches
+     * on the raw request URI and leaves dot segments to a servlet container that does not exist here, so
+     * "/admin/**" still reaches an admin handler. Filter selection has to apply for the raw spelling too.
+     */
+    @MethodSource("data")
+    @ParameterizedTest
+    void dotSegmentSteppingOutOfProtectedPrefix_isBlocked(String reqType) {
+        assertProtected(reqType, "/admin/../public/info");
+        assertProtected(reqType, "/admin/x/../../public/info");
+    }
+
+    /** The same, with the separators and dot segments percent-encoded. */
+    @MethodSource("data")
+    @ParameterizedTest
+    void encodedSeparatorSteppingOutOfProtectedPrefix_isBlocked(String reqType) {
+        assertProtected(reqType, "/admin/secret%2F..%2F..%2Fpublic%2Finfo");
+    }
+
+    /** No spelling may reach the wildcard admin handler without its filter. */
+    @MethodSource("data")
+    @ParameterizedTest
+    void wildcardAdminHandlerIsNeverReachedUnfiltered(String reqType) {
+        for (String path : new String[]{
+                "/admin/../public/info",
+                "/admin/x/../../public/info",
+                "/admin/secret%2F..%2F..%2Fpublic%2Finfo",
+                "/%61dmin/../public/info"}) {
+            AwsProxyResponse resp = get(reqType, path);
+            assertNotEquals(AdminWildcardController.WILDCARD_SECRET, resp.getBody(),
+                    "the wildcard admin handler was reached unfiltered via " + path + " on " + reqType);
+        }
+    }
+
 
     /** The protected body must never be returned for any spelling of the protected path. */
     @MethodSource("data")
