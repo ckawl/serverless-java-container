@@ -207,6 +207,25 @@ public class FilterChainManagerPathBypassTest {
     }
 
 
+    /**
+     * AwsHttpServletRequestWrapper is used on async dispatch, and AwsProxyRequestDispatcher resolves the servlet
+     * from its getPathInfo. It therefore has to report the same canonical path as the request it wraps, otherwise
+     * the async path reintroduces the filter/servlet disagreement.
+     */
+    @Test
+    void requestWrapper_reportsTheSameCanonicalPathAsTheWrappedRequest() {
+        for (String path : new String[]{
+                "/admin/secret", "/%61dmin/secret", "/admin/x/../../public", "/admin//secret", "/./admin/secret"}) {
+            AwsProxyHttpServletRequest original = new AwsProxyHttpServletRequest(
+                    new AwsProxyRequestBuilder("/unrelated", "GET").build(), lambdaContext, null);
+            original.setServletContext(servletContext);
+            AwsHttpServletRequestWrapper wrapped = new AwsHttpServletRequestWrapper(original, path);
+            assertEquals(AwsHttpServletRequest.canonicalizePath(path), wrapped.getPathInfo(),
+                    "wrapper disagrees with canonicalizePath for " + path);
+        }
+    }
+
+
     /** The canonicalization helper itself, independent of request plumbing. */
     @Test
     void canonicalize_decodesAndNormalizes() {
