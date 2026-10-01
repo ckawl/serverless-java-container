@@ -42,6 +42,7 @@ import javax.servlet.http.HttpSession;
 import javax.servlet.http.Part;
 import javax.ws.rs.core.MediaType;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
@@ -748,6 +749,84 @@ public abstract class AwsHttpServletRequest implements HttpServletRequest {
         }
 
     }
+
+    /**
+     * Produces the canonical form of a request path for filter matching: percent-decoded exactly once and then
+     * normalized. This is the same path servlet resolution operates on, which is what stops an encoded or
+     * dot-segment spelling of a protected path from selecting a different set of filters than the servlet it
+     * actually reaches.
+     *
+     * Decoding is deliberately not delegated to <code>URLDecoder</code>, which implements form encoding and would
+     * turn a literal "+" in a path segment into a space.
+     * @param path The raw request path, as returned by <code>getRequestURI</code>
+     * @return The decoded, normalized path, always starting with "/" and never ending with one
+     */
+    static String canonicalizePath(final String path) {
+        if (path == null || path.isEmpty()) {
+            return "/";
+        }
+        return normalizePathSegments(decodePathSegments(path));
+    }
+
+
+    /**
+     * Percent-decodes a path exactly once, treating the decoded bytes as UTF-8. Malformed escape sequences are left
+     * as literal characters rather than throwing, because a filter chain still has to be produced for a malformed
+     * request so that the application can reject it.
+     */
+    private static String decodePathSegments(final String path) {
+        if (path.indexOf('%') < 0) {
+            return path;
+        }
+
+        ByteArrayOutputStream decoded = new ByteArrayOutputStream(path.length());
+        for (int i = 0; i < path.length(); i++) {
+            char current = path.charAt(i);
+            if (current == '%' && i + 2 < path.length()) {
+                int high = Character.digit(path.charAt(i + 1), 16);
+                int low = Character.digit(path.charAt(i + 2), 16);
+                if (high >= 0 && low >= 0) {
+                    decoded.write((high << 4) + low);
+                    i += 2;
+                    continue;
+                }
+            }
+            byte[] literal = String.valueOf(current).getBytes(StandardCharsets.UTF_8);
+            decoded.write(literal, 0, literal.length);
+        }
+
+        return new String(decoded.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+
+    /**
+     * Collapses empty segments and resolves "." and ".." segments. Traversal above the root is contained rather than
+     * rejected, so that a path can never normalize to something outside the application.
+     */
+    private static String normalizePathSegments(final String path) {
+        Deque<String> segments = new ArrayDeque<>();
+        for (String segment : path.split("/", -1)) {
+            if (segment.isEmpty() || ".".equals(segment)) {
+                continue;
+            }
+            if ("..".equals(segment)) {
+                segments.pollLast();
+                continue;
+            }
+            segments.addLast(segment);
+        }
+
+        if (segments.isEmpty()) {
+            return "/";
+        }
+
+        StringBuilder normalized = new StringBuilder();
+        for (String segment : segments) {
+            normalized.append("/").append(segment);
+        }
+        return normalized.toString();
+    }
+
 
     static String cleanUri(String uri) {
         String finalUri = (uri == null ? "/" : uri);

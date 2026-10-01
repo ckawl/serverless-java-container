@@ -2,6 +2,7 @@ package com.amazonaws.serverless.proxy.internal.servlet;
 
 import com.amazonaws.serverless.proxy.internal.testutils.AwsProxyRequestBuilder;
 import com.amazonaws.serverless.proxy.internal.testutils.MockLambdaContext;
+import com.amazonaws.serverless.proxy.internal.testutils.MockServlet;
 import com.amazonaws.services.lambda.runtime.Context;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,8 @@ import java.io.IOException;
 import java.util.EnumSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -42,6 +45,7 @@ public class FilterChainManagerPathBypassTest {
         servletContext = new AwsServletContext(null);
         FilterRegistration.Dynamic adminFilter = servletContext.addFilter("AdminFilter", new MockFilter());
         adminFilter.addMappingForUrlPatterns(EnumSet.of(DispatcherType.REQUEST), true, "/admin/*");
+        servletContext.addServlet("adminServlet", new MockServlet()).addMapping("/admin/*");
         chainManager = new AwsFilterChainManager((AwsServletContext) servletContext);
     }
 
@@ -51,6 +55,14 @@ public class FilterChainManagerPathBypassTest {
         );
         req.setServletContext(servletContext);
         return chainManager.getFilterChain(req, null).filterCount();
+    }
+
+    private javax.servlet.Servlet servletForPath(String path) {
+        AwsProxyHttpServletRequest req = new AwsProxyHttpServletRequest(
+                new AwsProxyRequestBuilder(path, "GET").build(), lambdaContext, null
+        );
+        req.setServletContext(servletContext);
+        return ((AwsServletContext) servletContext).getServletForPath(req.getPathInfo());
     }
 
     /** Control: the plain protected path selects the filter. If this fails the test setup is wrong. */
@@ -144,15 +156,66 @@ public class FilterChainManagerPathBypassTest {
         assertEquals(1, filterCountFor("/admin/secret"));
     }
 
+    /**
+     * A dot segment that leads OUT of the protected path must not let the request reach a servlet mapped there.
+     * Filter selection and servlet resolution both run on the canonical path, so "/admin/x/../../public" is
+     * "/public" to both: the /admin/* filter correctly does not apply, and neither does the /admin/* servlet.
+     */
+    @Test
+    void filterChain_dotSegmentLeadingOutOfProtectedPath_agreesWithServletResolution() {
+        assertEquals(0, filterCountFor("/admin/x/../../public"));
+        assertNull(servletForPath("/admin/x/../../public"));
+    }
+
+    /** Same, with the dot segments percent-encoded. */
+    @Test
+    void filterChain_encodedDotSegmentLeadingOut_agreesWithServletResolution() {
+        assertEquals(0, filterCountFor("/admin/x/%2e%2e/%2e%2e/public"));
+        assertNull(servletForPath("/admin/x/%2e%2e/%2e%2e/public"));
+    }
+
+    /**
+     * The mirror case: a dot segment that lands ON a protected path must select that path's filter. This is the
+     * direction a decode-only canonicalization would miss.
+     */
+    @Test
+    void filterChain_dotSegmentLeadingIntoProtectedPath_selectsFilter() {
+        assertEquals(1, filterCountFor("/public/x/../../admin/secret"));
+        assertNotNull(servletForPath("/public/x/../../admin/secret"));
+    }
+
+    /** Whatever the spelling, filter selection and servlet resolution must never disagree. */
+    @Test
+    void filterSelectionAndServletResolutionNeverDisagree() {
+        for (String path : new String[]{
+                "/admin/secret",
+                "/%61dmin/secret",
+                "/admin%2Fsecret",
+                "/admin/x/../../public",
+                "/admin/x/%2e%2e/%2e%2e/public",
+                "/public/x/../../admin/secret",
+                "/public/info",
+                "/admin//secret",
+                "/./admin/secret",
+                "/../../admin/secret"
+        }) {
+            boolean filterApplies = filterCountFor(path) > 0;
+            boolean servletApplies = servletForPath(path) != null;
+            assertEquals(filterApplies, servletApplies,
+                    "filter selection and servlet resolution disagree for " + path);
+        }
+    }
+
+
     /** The canonicalization helper itself, independent of request plumbing. */
     @Test
     void canonicalize_decodesAndNormalizes() {
-        assertEquals("/admin/secret", FilterChainManager.canonicalizeMatchPath("/%61dmin/secret"));
-        assertEquals("/admin/secret", FilterChainManager.canonicalizeMatchPath("/admin%2Fsecret"));
-        assertEquals("/admin/secret", FilterChainManager.canonicalizeMatchPath("/public/../admin/secret"));
-        assertEquals("/admin/secret", FilterChainManager.canonicalizeMatchPath("/admin//secret"));
-        assertEquals("/admin/secret", FilterChainManager.canonicalizeMatchPath("/./admin/secret"));
-        assertEquals("/%61dmin/secret", FilterChainManager.canonicalizeMatchPath("/%2561dmin/secret"));
+        assertEquals("/admin/secret", AwsHttpServletRequest.canonicalizePath("/%61dmin/secret"));
+        assertEquals("/admin/secret", AwsHttpServletRequest.canonicalizePath("/admin%2Fsecret"));
+        assertEquals("/admin/secret", AwsHttpServletRequest.canonicalizePath("/public/../admin/secret"));
+        assertEquals("/admin/secret", AwsHttpServletRequest.canonicalizePath("/admin//secret"));
+        assertEquals("/admin/secret", AwsHttpServletRequest.canonicalizePath("/./admin/secret"));
+        assertEquals("/%61dmin/secret", AwsHttpServletRequest.canonicalizePath("/%2561dmin/secret"));
     }
 
     /**
@@ -161,15 +224,15 @@ public class FilterChainManagerPathBypassTest {
      */
     @Test
     void canonicalize_plusIsNotTreatedAsSpace() {
-        assertEquals("/admin+user/secret", FilterChainManager.canonicalizeMatchPath("/admin+user/secret"));
-        assertEquals("/admin user/secret", FilterChainManager.canonicalizeMatchPath("/admin%20user/secret"));
+        assertEquals("/admin+user/secret", AwsHttpServletRequest.canonicalizePath("/admin+user/secret"));
+        assertEquals("/admin user/secret", AwsHttpServletRequest.canonicalizePath("/admin%20user/secret"));
     }
 
     /** Canonicalization must never escape the root via excess dot segments. */
     @Test
     void canonicalize_traversalAboveRootIsContained() {
-        assertTrue(FilterChainManager.canonicalizeMatchPath("/../../admin/secret").startsWith("/admin"));
-        assertEquals("/", FilterChainManager.canonicalizeMatchPath("/../.."));
+        assertTrue(AwsHttpServletRequest.canonicalizePath("/../../admin/secret").startsWith("/admin"));
+        assertEquals("/", AwsHttpServletRequest.canonicalizePath("/../.."));
     }
 
     private static class MockFilter implements Filter {
