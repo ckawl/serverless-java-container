@@ -47,6 +47,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -739,67 +740,88 @@ public abstract class AwsHttpServletRequest implements HttpServletRequest {
         return new Locale(language, country);
     }
 
-    static String decodeRequestPath(String requestPath, ContainerConfig config) {
-        try {
-            return URLDecoder.decode(requestPath, config.getUriEncoding());
-        } catch (UnsupportedEncodingException ex) {
-            log.error("Could not URL decode the request path, configured encoding not supported: {}", SecurityUtils.encode(config.getUriEncoding()));
-            // we do not fail at this.
-            return requestPath;
-        }
-
-    }
 
     /**
-     * Produces the canonical form of a request path for filter matching: percent-decoded exactly once and then
-     * normalized. This is the same path servlet resolution operates on, which is what stops an encoded or
-     * dot-segment spelling of a protected path from selecting a different set of filters than the servlet it
-     * actually reaches.
+     * Produces the canonical form of a request path: percent-decoded exactly once and then normalized. This is the
+     * form every routing and authorization decision must use, so that no spelling of a path can make two decisions
+     * disagree about which resource is being requested.
      *
      * Decoding is deliberately not delegated to <code>URLDecoder</code>, which implements form encoding and would
      * turn a literal "+" in a path segment into a space.
-     * @param path The raw request path, as returned by <code>getRequestURI</code>
+     * @param path A request path
      * @return The decoded, normalized path, always starting with "/" and never ending with one
      */
-    static String canonicalizePath(final String path) {
+    public static String canonicalizePath(final String path) {
         if (path == null || path.isEmpty()) {
             return "/";
         }
-        return normalizePathSegments(decodePathSegments(path));
+        return normalizePathSegments(decodePath(path));
     }
 
 
     /**
-     * Percent-decodes a path exactly once, treating the decoded bytes as UTF-8. Malformed escape sequences are left
-     * as literal characters rather than throwing, because a filter chain still has to be produced for a malformed
-     * request so that the application can reject it.
+     * Percent-decodes a path exactly once, leaving dot segments in place. Code that rejects suspicious input needs
+     * this form rather than the canonical one: <code>canonicalizePath</code> resolves "." and ".." away, which hides
+     * a traversal attempt from any validator looking for it.
+     *
+     * Escape sequences are gathered and decoded as a group using the configured URI encoding, so a multi-byte
+     * character spanning several escapes decodes correctly. Literal characters are copied across untouched, which
+     * also means a surrogate pair is never split.
+     * @param path A request path
+     * @return The path with escape sequences decoded, dot segments untouched
      */
-    private static String decodePathSegments(final String path) {
-        if (path.indexOf('%') < 0) {
+    public static String decodePath(final String path) {
+        if (path == null || path.indexOf('%') < 0) {
             return path;
         }
 
-        ByteArrayOutputStream decoded = new ByteArrayOutputStream(path.length());
+        Charset charset = uriCharset();
+        StringBuilder decoded = new StringBuilder(path.length());
+        ByteArrayOutputStream pending = new ByteArrayOutputStream();
         for (int i = 0; i < path.length(); i++) {
             char current = path.charAt(i);
             if (current == '%' && i + 2 < path.length()) {
                 int high = Character.digit(path.charAt(i + 1), 16);
                 int low = Character.digit(path.charAt(i + 2), 16);
                 if (high >= 0 && low >= 0) {
-                    decoded.write((high << 4) + low);
+                    pending.write((high << 4) + low);
                     i += 2;
                     continue;
                 }
             }
-            // A character outside the BMP is stored as a surrogate pair. Encoding either half on its own is not
-            // possible, so the pair has to be written as a unit or the character is replaced by "??".
-            int end = i + 1 < path.length() && Character.isSurrogatePair(current, path.charAt(i + 1)) ? i + 2 : i + 1;
-            byte[] literal = path.substring(i, end).getBytes(StandardCharsets.UTF_8);
-            decoded.write(literal, 0, literal.length);
-            i = end - 1;
+            flushDecodedBytes(pending, decoded, charset);
+            decoded.append(current);
         }
+        flushDecodedBytes(pending, decoded, charset);
 
-        return new String(decoded.toByteArray(), StandardCharsets.UTF_8);
+        return decoded.toString();
+    }
+
+
+    private static void flushDecodedBytes(ByteArrayOutputStream pending, StringBuilder out, Charset charset) {
+        if (pending.size() > 0) {
+            out.append(new String(pending.toByteArray(), charset));
+            pending.reset();
+        }
+    }
+
+
+    /**
+     * The charset configured for decoding request URIs, falling back to UTF-8 if it is unset or not supported.
+     * Never throws, because this runs on every request including malformed ones.
+     */
+    private static Charset uriCharset() {
+        ContainerConfig config = LambdaContainerHandler.getContainerConfig();
+        String configured = (config == null ? null : config.getUriEncoding());
+        if (configured == null || configured.isEmpty()) {
+            return StandardCharsets.UTF_8;
+        }
+        try {
+            return Charset.forName(configured);
+        } catch (Exception e) {
+            log.warn("Configured uriEncoding is not supported, falling back to UTF-8");
+            return StandardCharsets.UTF_8;
+        }
     }
 
 

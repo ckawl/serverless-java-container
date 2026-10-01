@@ -89,11 +89,14 @@ public abstract class FilterChainManager<ServletContextType extends ServletConte
      * @return A <code>FilterChainHolder</code> object that can be used to apply the filters to the request
      */
     FilterChainHolder getFilterChain(final HttpServletRequest request, Servlet servlet) {
-        // getRequestURI returns the raw, undecoded path while servlet resolution runs on the decoded path from
-        // getPathInfo. Matching url-patterns against the raw path let a percent-encoded or dot-segment form of a
-        // protected path skip its filter and still reach the servlet mapped to it. Canonicalize first so filter
-        // selection and servlet resolution can never disagree about which path is being requested.
-        String targetPath = AwsHttpServletRequest.canonicalizePath(request.getRequestURI());
+        // The same canonical, context-relative path servlet resolution uses, so the two cannot disagree about which
+        // resource is being requested. getRequestURI is not used here: it is undecoded, and it includes the context
+        // path, while url-patterns are relative to the context. With a configured stage or base path that mismatch
+        // alone was enough to skip a path-scoped filter that the servlet still matched.
+        String targetPath = request.getPathInfo();
+        if (targetPath == null || targetPath.isEmpty()) {
+            targetPath = PATH_PART_SEPARATOR;
+        }
         DispatcherType type = request.getDispatcherType();
 
         // only return the cached result if the filter list hasn't changed in the meanwhile

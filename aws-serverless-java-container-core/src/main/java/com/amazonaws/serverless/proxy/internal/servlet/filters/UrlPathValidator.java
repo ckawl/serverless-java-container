@@ -15,6 +15,7 @@ package com.amazonaws.serverless.proxy.internal.servlet.filters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.amazonaws.serverless.proxy.internal.servlet.AwsHttpServletRequest;
 import javax.servlet.*;
 import javax.servlet.annotation.WebFilter;
 import javax.servlet.http.HttpServletRequest;
@@ -72,10 +73,12 @@ public class UrlPathValidator implements Filter {
 
     @Override
     public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
-        // Deliberately the raw URI rather than getPathInfo. getPathInfo returns the canonical path, with dot
-        // segments already resolved, so a traversal attempt would be normalized away before this filter could
-        // reject it. A validator of suspicious input has to inspect the input as it arrived.
-        String path = ((HttpServletRequest)servletRequest).getRequestURI();
+        // This filter has to see the path decoded but NOT normalized. getPathInfo resolves dot segments, which
+        // would hide a traversal attempt from the checks below, and the raw URI leaves escapes encoded, so
+        // "/%2e%2e/x" would not register as "..". The context path is excluded because it contributes slashes
+        // without contributing dot segments, which loosens the ratio check further down.
+        HttpServletRequest httpRequest = (HttpServletRequest) servletRequest;
+        String path = AwsHttpServletRequest.decodePath(stripContextPath(httpRequest));
         if (path == null) {
             setErrorResponse(servletResponse);
             return;
@@ -141,4 +144,18 @@ public class UrlPathValidator implements Filter {
         }
         return stringCount;
     }
+
+    /**
+     * The request URI with the context path removed, still encoded. The context path is configured rather than
+     * client-supplied, so including it would only dilute the checks applied to the part the client controls.
+     */
+    private static String stripContextPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (uri != null && contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath)) {
+            return uri.substring(contextPath.length());
+        }
+        return uri;
+    }
+
 }
