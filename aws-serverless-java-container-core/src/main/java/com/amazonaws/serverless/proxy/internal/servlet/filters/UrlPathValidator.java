@@ -72,8 +72,10 @@ public class UrlPathValidator implements Filter {
 
     @Override
     public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
-        // the getPathInfo method of the AwsProxyHttpServletRequest returns the request path with the correct base path stripped
-        String path = ((HttpServletRequest)servletRequest).getPathInfo();
+        // Deliberately the raw URI rather than getPathInfo. getPathInfo returns the canonical path, with dot
+        // segments already resolved, so a traversal attempt would be normalized away before this filter could
+        // reject it. A validator of suspicious input has to inspect the input as it arrived.
+        String path = ((HttpServletRequest)servletRequest).getRequestURI();
         if (path == null) {
             setErrorResponse(servletResponse);
             return;
