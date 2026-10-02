@@ -158,9 +158,10 @@ public class FilterChainManagerPathBypassTest {
 
     /**
      * A dot segment that steps OUT of the protected prefix must still select that prefix's filter. The canonical
-     * form is "/public", but Spring MVC matches on the raw request URI and leaves dot segments to a servlet
+     * form is "/public", but Spring MVC matches on the undecoded request URI and leaves dot segments to a servlet
      * container that does not exist here, so "/admin/**" still reaches an admin handler. Selecting the filter for
-     * the raw spelling as well is what stops that from being a bypass.
+     * the decoded-but-not-normalized spelling as well is what stops that from being a bypass: matching on the
+     * canonical path alone leaves this request reaching the admin handler unfiltered.
      */
     @Test
     void filterChain_dotSegmentLeadingOutOfProtectedPath_stillSelectsFilter() {
