@@ -111,8 +111,9 @@ public class FilterAuthorizationBypassTest {
 
     /**
      * Spellings that step OUT of the protected prefix. The canonical form is "/public/info", but Spring MVC matches
-     * on the raw request URI and leaves dot segments to a servlet container that does not exist here, so
-     * "/admin/**" still reaches an admin handler. Filter selection has to apply for the raw spelling too.
+     * on the undecoded request URI and leaves dot segments to a servlet container that does not exist here, so
+     * "/admin/**" still reaches an admin handler. Filter selection has to apply for the decoded-but-not-normalized
+     * spelling too, since matching on the canonical path alone leaves this reaching the handler unfiltered.
      */
     @MethodSource("data")
     @ParameterizedTest
