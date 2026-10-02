@@ -89,19 +89,25 @@ public abstract class FilterChainManager<ServletContextType extends ServletConte
      * @return A <code>FilterChainHolder</code> object that can be used to apply the filters to the request
      */
     FilterChainHolder getFilterChain(final HttpServletRequest request, Servlet servlet) {
-        // Downstream consumers do not agree on which form of the path they route on. Servlet resolution here uses the
-        // canonical path, Spring MVC matches on the raw request URI and leaves dot segments to a servlet container
-        // that does not exist in Lambda, and other code reads the decoded-but-not-normalized form. Predicting which
-        // one wins is how this class of bypass keeps coming back, so filter selection does not try: a filter applies
-        // if its url-pattern matches the path under ANY of those spellings. That over-selects, which means a filter
-        // may run for a request that ends up routed elsewhere. Under-selecting is the authorization bypass.
+        // Filter selection and servlet resolution used to read the path from different sources, which is the bypass
+        // this fixes. They cannot just be pointed at one source, because consumers downstream disagree about which
+        // form they route on, so a filter applies if its url-pattern matches under either of two spellings.
+        //
+        // The canonical path is the one servlet resolution here uses, since getPathInfo() is decoded and normalized.
+        // The decoded-but-not-normalized path is needed because Spring MVC matches on the undecoded request URI and
+        // leaves dot segments to a servlet container that does not exist in Lambda. "/admin/../public/info" still
+        // reaches an "/admin/**" handler even though its canonical form is "/public/info", so matching on the
+        // canonical path alone leaves that request reaching an admin handler with its filter skipped.
+        //
+        // Matching under either spelling over-selects, so a filter may run for a request that is ultimately routed
+        // elsewhere. Under-selecting is the authorization bypass, so that is the direction chosen.
         String rawPath = AwsHttpServletRequest.contextRelativeRequestUri(request);
         String decodedPath = AwsHttpServletRequest.decodePath(rawPath);
         String canonicalPath = request.getPathInfo();
         if (canonicalPath == null || canonicalPath.isEmpty()) {
             canonicalPath = AwsHttpServletRequest.canonicalizePath(rawPath);
         }
-        String targetPath = canonicalPath + "|" + decodedPath + "|" + rawPath;
+        String targetPath = canonicalPath + "|" + decodedPath;
         DispatcherType type = request.getDispatcherType();
 
         // only return the cached result if the filter list hasn't changed in the meanwhile
@@ -131,7 +137,7 @@ public abstract class FilterChainManager<ServletContextType extends ServletConte
                 continue;
             }
             for (String path : holder.getRegistration().getUrlPatternMappings()) {
-                if (pathMatches(canonicalPath, path) || pathMatches(decodedPath, path) || pathMatches(rawPath, path)) {
+                if (pathMatches(canonicalPath, path) || pathMatches(decodedPath, path)) {
                     chainHolder.addFilter(holder);
                     break;
                 }
